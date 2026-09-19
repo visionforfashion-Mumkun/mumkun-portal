@@ -15,7 +15,8 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # 2. Database setup (Relational Structure)
-conn = sqlite3.connect('mumkun_v2.db', check_same_thread=False)
+# Using v3 to ensure the new columns load perfectly
+conn = sqlite3.connect('mumkun_v3.db', check_same_thread=False)
 c = conn.cursor()
 
 # Create Tables
@@ -60,14 +61,16 @@ with tab1:
             p_weight = st.number_input("Weight per piece (KG)", min_value=0.01, step=0.05, value=0.20)
         
         if st.form_submit_button("Save Product"):
-            c.execute('INSERT INTO products (name, category, supplier, weight_kg) VALUES (?,?,?,?)', 
-                      (p_name, p_category, p_supplier, p_weight))
-            conn.commit()
-            st.success(f"Product '{p_name}' added to database.")
+            if p_name:
+                c.execute('INSERT INTO products (name, category, supplier, weight_kg) VALUES (?,?,?,?)', 
+                          (p_name, p_category, p_supplier, p_weight))
+                conn.commit()
+                st.success(f"Product '{p_name}' added to database.")
+            else:
+                st.error("Please enter a product name.")
     
     st.subheader("Product Catalog")
     st.dataframe(get_products(), use_container_width=True)
-
 
 # --- TAB 2: CUSTOMERS ---
 with tab2:
@@ -80,13 +83,15 @@ with tab2:
             c_phone = st.text_input("Phone Number")
             
         if st.form_submit_button("Save Customer"):
-            c.execute('INSERT INTO customers (name, phone) VALUES (?,?)', (c_name, c_phone))
-            conn.commit()
-            st.success(f"Customer '{c_name}' added to database.")
+            if c_name:
+                c.execute('INSERT INTO customers (name, phone) VALUES (?,?)', (c_name, c_phone))
+                conn.commit()
+                st.success(f"Customer '{c_name}' added to database.")
+            else:
+                st.error("Please enter a customer name.")
             
     st.subheader("Client List")
     st.dataframe(get_customers(), use_container_width=True)
-
 
 # --- TAB 3: PURCHASES ---
 with tab3:
@@ -100,7 +105,6 @@ with tab3:
             col1, col2, col3 = st.columns(3)
             with col1:
                 purchase_date = st.date_input("Purchase Date", date.today())
-                # Create a dictionary mapping product names to IDs for the dropdown
                 product_dict = dict(zip(prod_df['name'], prod_df['id']))
                 selected_prod_name = st.selectbox("Select Product", options=list(product_dict.keys()))
                 qty = st.number_input("Quantity Purchased", min_value=1, step=1)
@@ -134,16 +138,17 @@ with tab3:
                      weight_cost_try, extra_costs_try, exchange_rate, total_cost_egp, unit_cost_egp))
                 conn.commit()
                 
-                st.success(f"Purchase logged! Overall Weight: {total_weight_kg:.2f} KG | Weight Cost: {weight_cost_try:,.2f} TRY | Landed Unit Cost: {unit_cost_egp:,.2f} EGP")
+                st.success(f"Purchase logged successfully for {purchase_date}!")
+                st.info(f"📦 Overall Weight: {total_weight_kg:.2f} KG | 🚚 Cost of Weight: {weight_cost_try:,.2f} TRY | 💰 Overall Total Cost: {total_cost_egp:,.2f} EGP")
                 
     st.subheader("Purchase History")
     purchases_df = pd.read_sql_query("""
-        SELECT p.purchase_date, pr.name as product, p.qty, p.total_weight_kg, 
-               p.weight_cost_try, p.total_cost_egp, p.unit_cost_egp 
+        SELECT p.purchase_date as 'Purchase Date', pr.name as 'Product', p.qty as 'Qty', 
+               p.total_weight_kg as 'Total Weight (KG)', p.weight_cost_try as 'Cost of Weight (TRY)', 
+               p.total_cost_egp as 'Overall Cost (EGP)', p.unit_cost_egp as 'Unit Cost (EGP)'
         FROM purchases p JOIN products pr ON p.product_id = pr.id
     """, conn)
     st.dataframe(purchases_df, use_container_width=True)
-
 
 # --- TAB 4: SALES ---
 with tab4:
@@ -168,7 +173,7 @@ with tab4:
                 
             with col3:
                 unit_selling_price_egp = st.number_input("Selling Price per piece (EGP)", min_value=0.0, step=50.0)
-                delivery_cost_egp = st.number_input("Actual Courier Delivery Cost (EGP)", min_value=0.0, step=10.0)
+                delivery_cost_egp = st.number_input("Shipping in Egypt (Courier Cost EGP)", min_value=0.0, step=10.0)
                 
             if st.form_submit_button("Calculate & Save Sale"):
                 c_id = cust_dict[selected_cust]
@@ -191,12 +196,13 @@ with tab4:
                         (str(sale_date), p_id, c_id, sale_qty, unit_selling_price_egp, delivery_cost_egp, cogs_egp, profit_egp))
                     conn.commit()
                     
-                    st.success(f"Sale recorded! Revenue: {revenue:,.2f} EGP | Cost of Goods: {cogs_egp:,.2f} EGP | Net Profit: {profit_egp:,.2f} EGP")
+                    st.success(f"Sale recorded for {sale_date}! Revenue: {revenue:,.2f} EGP | Cost of Goods: {cogs_egp:,.2f} EGP | Net Profit: {profit_egp:,.2f} EGP")
                     
     st.subheader("Sales History")
     sales_df = pd.read_sql_query("""
-        SELECT s.sale_date, c.name as customer, p.name as product, s.qty, 
-               s.unit_selling_price_egp, s.profit_egp 
+        SELECT s.sale_date as 'Sale Date', c.name as 'Customer', p.name as 'Product', s.qty as 'Qty', 
+               s.unit_selling_price_egp as 'Price (EGP)', s.delivery_cost_egp as 'Egypt Shipping (EGP)', 
+               s.profit_egp as 'Net Profit (EGP)'
         FROM sales s 
         JOIN customers c ON s.customer_id = c.id
         JOIN products p ON s.product_id = p.id
@@ -213,5 +219,19 @@ with tab5:
     
     col1.metric("Total Revenue (EGP)", f"{total_sales:,.2f}")
     col2.metric("Total Net Profit (EGP)", f"{total_profit:,.2f}")
+    
+    st.divider()
+    
+    st.subheader("Export Data")
+    st.write("Download your complete database as an Excel-compatible CSV file.")
+    
+    # Download Full Purchases
+    full_purchases = pd.read_sql_query("SELECT * FROM purchases", conn)
+    st.download_button(
+        label="📥 Download Purchases (CSV)",
+        data=full_purchases.to_csv(index=False).encode('utf-8-sig'),
+        file_name='Mumkun_Purchases.csv',
+        mime='text/csv'
+    )
 
 st.markdown('<div class="footer">Made possible with love.</div>', unsafe_allow_html=True)
