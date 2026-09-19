@@ -35,9 +35,25 @@ c.execute('''
 ''')
 conn.commit()
 
+# --- NEW: Sidebar for Backup & Restore ---
+with st.sidebar:
+    st.header("🛠️ Database Management")
+    st.write("Use this section to restore your data if the server goes to sleep.")
+    
+    uploaded_file = st.file_uploader("Upload Backup CSV", type=['csv'])
+    if uploaded_file is not None:
+        if st.button("Restore Database"):
+            try:
+                restore_df = pd.read_csv(uploaded_file)
+                # Overwrite the empty database with the uploaded backup
+                restore_df.to_sql('orders', conn, if_exists='replace', index=False)
+                st.success("✅ Data restored! Please refresh the page.")
+            except Exception as e:
+                st.error("Error restoring data. Make sure it is the exact Mümkün backup file.")
+# -----------------------------------------
+
 st.title("Mümkün Business Portal ✨")
 
-# 3. International shipping calculation
 def calculate_international_shipping(weight):
     if weight <= 0.5:
         return 200
@@ -48,7 +64,6 @@ def calculate_international_shipping(weight):
     else:
         return 950 + ((weight - 5.0) * 100)
 
-# 4. Data entry interface
 with st.expander("📦 Add New Order", expanded=False):
     with st.form("new_order_form"):
         col1, col2, col3 = st.columns(3)
@@ -93,19 +108,16 @@ with st.expander("📦 Add New Order", expanded=False):
             
             st.success(f"Order saved successfully! Total Cost: {total_cost_egp:,.2f} EGP | Net Profit: {profit_egp:,.2f} EGP")
 
-# 5. Fetch Data for Dashboard
 df = pd.read_sql_query("SELECT * FROM orders", conn)
 
 if not df.empty:
     st.header("📈 Financial Dashboard")
     
-    # Calculate overarching metrics
     total_revenue = df['selling_price_egp'].sum()
     total_cost = df['total_cost_egp'].sum()
     total_profit = df['profit_egp'].sum()
     margin = (total_profit / total_revenue * 100) if total_revenue > 0 else 0
     
-    # Display Metric Cards
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Total Revenue", f"{total_revenue:,.0f} EGP")
     m2.metric("Total Costs", f"{total_cost:,.0f} EGP")
@@ -114,11 +126,9 @@ if not df.empty:
     
     st.markdown("---")
     
-    # Visualizations
     col_chart1, col_chart2 = st.columns(2)
     
     with col_chart1:
-        # Profit by Category Pie Chart (Using Brand Colors)
         profit_by_cat = df.groupby('category')['profit_egp'].sum().reset_index()
         fig_pie = px.pie(profit_by_cat, values='profit_egp', names='category', 
                          title='Profit Distribution by Category',
@@ -127,7 +137,6 @@ if not df.empty:
         st.plotly_chart(fig_pie, use_container_width=True)
 
     with col_chart2:
-        # Revenue vs Cost Bar Chart
         financials_by_date = df.groupby('order_date')[['selling_price_egp', 'total_cost_egp']].sum().reset_index()
         financials_by_date.rename(columns={'selling_price_egp': 'Revenue', 'total_cost_egp': 'Cost'}, inplace=True)
         
@@ -141,7 +150,6 @@ if not df.empty:
 
     st.markdown("---")
     
-    # Database Table
     st.header("📊 Full Order History")
     st.dataframe(df, use_container_width=True)
     
@@ -152,6 +160,6 @@ if not df.empty:
         mime='text/csv'
     )
 else:
-    st.info("Database is currently empty. Start by adding new orders above to see your dashboard!")
+    st.info("Database is currently empty. Add new orders, or open the sidebar menu to restore a backup!")
 
 st.markdown('<div class="footer">Made possible with love.</div>', unsafe_allow_html=True)
