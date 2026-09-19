@@ -2,24 +2,66 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 from datetime import date
+import io
 
-# 1. Page settings and branding
+# 1. Page settings and Elegant MÜMKÜN Branding
 st.set_page_config(page_title="Mümkün Portal", layout="wide")
 st.markdown("""
     <style>
-    .main {background-color: #FDFBF7;} 
-    h1, h2, h3 {color: #D4AF37;} 
-    .stButton>button {background-color: #D4AF37; color: white; border: none;}
-    .footer {text-align: center; color: #8C7B65; font-style: italic; margin-top: 50px;}
+    @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&family=Tajawal:wght@300;400;500&display=swap');
+    
+    /* Overall Background and Text */
+    .stApp {
+        background-color: #FAF5F0; /* Soft warm ivory */
+        color: #5C4A4A; /* Soft brown/dark rose */
+        font-family: 'Tajawal', sans-serif;
+    }
+    
+    /* Headers */
+    h1, h2, h3 {
+        font-family: 'Cormorant Garamond', serif !important;
+        color: #B8935A !important; /* Champagne gold */
+        font-weight: 600;
+    }
+    
+    /* Buttons */
+    .stButton>button {
+        background-color: #E8D3D1; /* Soft blush pink */
+        color: #5C4A4A;
+        border: 1px solid #C09A6E; /* Gold border */
+        border-radius: 8px;
+        transition: all 0.3s ease;
+    }
+    .stButton>button:hover {
+        background-color: #C09A6E; /* Champagne gold on hover */
+        color: #FFFFFF;
+        border-color: #B8935A;
+    }
+    
+    /* Input Fields */
+    div[data-baseweb="input"] > div, div[data-baseweb="select"] > div {
+        background-color: #FFFFFF;
+        border-radius: 6px;
+        border: 1px solid #E4D8C8;
+    }
+    
+    /* Footer */
+    .footer {
+        text-align: center; 
+        color: #A88B7D; 
+        font-style: italic; 
+        font-family: 'Cormorant Garamond', serif;
+        margin-top: 50px;
+        font-size: 18px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# 2. Database setup (Relational Structure)
-# Using v3 to ensure the new columns load perfectly
-conn = sqlite3.connect('mumkun_v3.db', check_same_thread=False)
+# 2. Database setup (v5 to support Multi-Currency tracking)
+DB_FILE = 'mumkun_v5.db'
+conn = sqlite3.connect(DB_FILE, check_same_thread=False)
 c = conn.cursor()
 
-# Create Tables
 c.execute('''CREATE TABLE IF NOT EXISTS products (
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, category TEXT, supplier TEXT, weight_kg REAL)''')
 
@@ -28,24 +70,19 @@ c.execute('''CREATE TABLE IF NOT EXISTS customers (
 
 c.execute('''CREATE TABLE IF NOT EXISTS purchases (
     id INTEGER PRIMARY KEY AUTOINCREMENT, purchase_date TEXT, product_id INTEGER, 
-    qty INTEGER, unit_price_try REAL, shipping_per_kg_try REAL, total_weight_kg REAL, 
-    weight_cost_try REAL, extra_costs_try REAL, exchange_rate REAL, total_cost_egp REAL, unit_cost_egp REAL)''')
+    qty INTEGER, currency TEXT, unit_price_foreign REAL, extra_costs_foreign REAL, exchange_rate REAL, 
+    shipping_per_kg_egp REAL, total_weight_kg REAL, weight_cost_egp REAL, total_cost_egp REAL, unit_cost_egp REAL)''')
 
 c.execute('''CREATE TABLE IF NOT EXISTS sales (
     id INTEGER PRIMARY KEY AUTOINCREMENT, sale_date TEXT, product_id INTEGER, customer_id INTEGER, 
     qty INTEGER, unit_selling_price_egp REAL, delivery_cost_egp REAL, cogs_egp REAL, profit_egp REAL)''')
 conn.commit()
 
-# Helper Functions to fetch data for dropdowns
-def get_products():
-    return pd.read_sql_query("SELECT * FROM products", conn)
-
-def get_customers():
-    return pd.read_sql_query("SELECT * FROM customers", conn)
+def get_products(): return pd.read_sql_query("SELECT * FROM products", conn)
+def get_customers(): return pd.read_sql_query("SELECT * FROM customers", conn)
 
 st.title("Mümkün Business Portal ✨")
 
-# Create Navigation Tabs
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["🛍️ Products", "👥 Customers", "🛒 Purchases", "💰 Sales", "📊 Dashboard"])
 
 # --- TAB 1: PRODUCTS ---
@@ -54,23 +91,49 @@ with tab1:
     with st.form("product_form"):
         col1, col2 = st.columns(2)
         with col1:
-            p_name = st.text_input("Product Name")
+            p_name = st.text_input("Product Name").strip()
             p_category = st.selectbox("Category", ["Skincare", "Fashion", "Accessories", "Other"])
         with col2:
-            p_supplier = st.text_input("Supplier (e.g., Trendyol, Zara)")
+            p_supplier = st.text_input("Supplier (e.g., Trendyol, Zara, Shein)")
             p_weight = st.number_input("Weight per piece (KG)", min_value=0.01, step=0.05, value=0.20)
         
         if st.form_submit_button("Save Product"):
             if p_name:
-                c.execute('INSERT INTO products (name, category, supplier, weight_kg) VALUES (?,?,?,?)', 
-                          (p_name, p_category, p_supplier, p_weight))
-                conn.commit()
-                st.success(f"Product '{p_name}' added to database.")
+                c.execute("SELECT id FROM products WHERE name = ?", (p_name,))
+                if c.fetchone():
+                    st.error(f"⚠️ A product named '{p_name}' already exists! ID was not duplicated.")
+                else:
+                    c.execute('INSERT INTO products (name, category, supplier, weight_kg) VALUES (?,?,?,?)', 
+                              (p_name, p_category, p_supplier, p_weight))
+                    conn.commit()
+                    st.success(f"Product '{p_name}' added to database.")
             else:
                 st.error("Please enter a product name.")
     
     st.subheader("Product Catalog")
-    st.dataframe(get_products(), use_container_width=True)
+    prod_df = get_products()
+    st.dataframe(prod_df, use_container_width=True)
+
+    if not prod_df.empty:
+        with st.expander("✏️ Edit or Delete a Product"):
+            edit_p_name = st.selectbox("Select Product to Edit", prod_df['name'])
+            selected_p = prod_df[prod_df['name'] == edit_p_name].iloc[0]
+            
+            c1, c2 = st.columns(2)
+            new_p_name = c1.text_input("Edit Name", selected_p['name'], key="ep_name")
+            new_p_weight = c2.number_input("Edit Weight (KG)", value=float(selected_p['weight_kg']), key="ep_w")
+            
+            col_update, col_del = st.columns(2)
+            if col_update.button("Update Product"):
+                c.execute("UPDATE products SET name=?, weight_kg=? WHERE id=?", (new_p_name, new_p_weight, int(selected_p['id'])))
+                conn.commit()
+                st.success("Updated!")
+                st.rerun()
+            if col_del.button("❌ Delete Product"):
+                c.execute("DELETE FROM products WHERE id=?", (int(selected_p['id']),))
+                conn.commit()
+                st.success("Deleted!")
+                st.rerun()
 
 # --- TAB 2: CUSTOMERS ---
 with tab2:
@@ -78,20 +141,46 @@ with tab2:
     with st.form("customer_form"):
         col1, col2 = st.columns(2)
         with col1:
-            c_name = st.text_input("Customer Name")
+            c_name = st.text_input("Customer Name").strip()
         with col2:
-            c_phone = st.text_input("Phone Number")
+            c_phone = st.text_input("Phone Number").strip()
             
         if st.form_submit_button("Save Customer"):
             if c_name:
-                c.execute('INSERT INTO customers (name, phone) VALUES (?,?)', (c_name, c_phone))
-                conn.commit()
-                st.success(f"Customer '{c_name}' added to database.")
+                c.execute("SELECT id FROM customers WHERE name = ?", (c_name,))
+                if c.fetchone():
+                    st.error(f"⚠️ Customer '{c_name}' already exists! ID was not duplicated.")
+                else:
+                    c.execute('INSERT INTO customers (name, phone) VALUES (?,?)', (c_name, c_phone))
+                    conn.commit()
+                    st.success(f"Customer '{c_name}' added to database.")
             else:
                 st.error("Please enter a customer name.")
             
     st.subheader("Client List")
-    st.dataframe(get_customers(), use_container_width=True)
+    cust_df = get_customers()
+    st.dataframe(cust_df, use_container_width=True)
+
+    if not cust_df.empty:
+        with st.expander("✏️ Edit or Delete a Customer"):
+            edit_c_name = st.selectbox("Select Customer to Edit", cust_df['name'])
+            selected_c = cust_df[cust_df['name'] == edit_c_name].iloc[0]
+            
+            c1, c2 = st.columns(2)
+            new_c_name = c1.text_input("Edit Name", selected_c['name'], key="ec_name")
+            new_c_phone = c2.text_input("Edit Phone", selected_c['phone'], key="ec_phone")
+            
+            col_update, col_del = st.columns(2)
+            if col_update.button("Update Customer"):
+                c.execute("UPDATE customers SET name=?, phone=? WHERE id=?", (new_c_name, new_c_phone, int(selected_c['id'])))
+                conn.commit()
+                st.success("Updated!")
+                st.rerun()
+            if col_del.button("❌ Delete Customer"):
+                c.execute("DELETE FROM customers WHERE id=?", (int(selected_c['id']),))
+                conn.commit()
+                st.success("Deleted!")
+                st.rerun()
 
 # --- TAB 3: PURCHASES ---
 with tab3:
@@ -110,12 +199,13 @@ with tab3:
                 qty = st.number_input("Quantity Purchased", min_value=1, step=1)
                 
             with col2:
-                unit_price_try = st.number_input("Supplier Price per piece (TRY)", min_value=0.0, step=10.0)
-                shipping_per_kg_try = st.number_input("Shipping Rate per KG (TRY)", min_value=0.0, step=5.0, value=150.0)
-                extra_costs_try = st.number_input("Extra Costs/Customs (TRY)", min_value=0.0, step=10.0)
+                currency = st.selectbox("Purchase Currency", ["TRY", "USD", "EUR", "AED", "SAR", "GBP", "EGP"])
+                unit_price_foreign = st.number_input("Supplier Price per piece (in selected currency)", min_value=0.0, step=10.0)
+                extra_costs_foreign = st.number_input("Extra Costs/Customs (in selected currency)", min_value=0.0, step=10.0)
                 
             with col3:
-                exchange_rate = st.number_input("Exchange Rate (TRY to EGP)", min_value=0.1, step=0.05, value=1.45)
+                exchange_rate = st.number_input("Exchange Rate (to EGP)", min_value=0.1, step=0.05, value=1.45)
+                shipping_per_kg_egp = st.number_input("Shipping Rate per KG (EGP)", min_value=0.0, step=10.0, value=250.0)
                 
             if st.form_submit_button("Calculate & Save Purchase"):
                 prod_id = product_dict[selected_prod_name]
@@ -123,32 +213,44 @@ with tab3:
                 
                 # Math Logic
                 total_weight_kg = unit_weight * qty
-                weight_cost_try = total_weight_kg * shipping_per_kg_try
-                product_cost_try = unit_price_try * qty
-                total_try = product_cost_try + weight_cost_try + extra_costs_try
+                weight_cost_egp = total_weight_kg * shipping_per_kg_egp 
                 
-                total_cost_egp = total_try * exchange_rate
+                product_cost_foreign = unit_price_foreign * qty
+                total_foreign = product_cost_foreign + extra_costs_foreign
+                
+                # Convert foreign currency to EGP, then add the Egypt shipping
+                total_cost_egp = (total_foreign * exchange_rate) + weight_cost_egp
                 unit_cost_egp = total_cost_egp / qty
                 
                 c.execute('''INSERT INTO purchases 
-                    (purchase_date, product_id, qty, unit_price_try, shipping_per_kg_try, total_weight_kg, 
-                    weight_cost_try, extra_costs_try, exchange_rate, total_cost_egp, unit_cost_egp) 
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?)''', 
-                    (str(purchase_date), prod_id, qty, unit_price_try, shipping_per_kg_try, total_weight_kg,
-                     weight_cost_try, extra_costs_try, exchange_rate, total_cost_egp, unit_cost_egp))
+                    (purchase_date, product_id, qty, currency, unit_price_foreign, extra_costs_foreign, exchange_rate, 
+                    shipping_per_kg_egp, total_weight_kg, weight_cost_egp, total_cost_egp, unit_cost_egp) 
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''', 
+                    (str(purchase_date), prod_id, qty, currency, unit_price_foreign, extra_costs_foreign, exchange_rate,
+                     shipping_per_kg_egp, total_weight_kg, weight_cost_egp, total_cost_egp, unit_cost_egp))
                 conn.commit()
                 
                 st.success(f"Purchase logged successfully for {purchase_date}!")
-                st.info(f"📦 Overall Weight: {total_weight_kg:.2f} KG | 🚚 Cost of Weight: {weight_cost_try:,.2f} TRY | 💰 Overall Total Cost: {total_cost_egp:,.2f} EGP")
+                st.info(f"📦 Overall Weight: {total_weight_kg:.2f} KG | 🚚 Cost of Weight: {weight_cost_egp:,.2f} EGP | 💰 Overall Total Cost: {total_cost_egp:,.2f} EGP")
                 
     st.subheader("Purchase History")
     purchases_df = pd.read_sql_query("""
-        SELECT p.purchase_date as 'Purchase Date', pr.name as 'Product', p.qty as 'Qty', 
-               p.total_weight_kg as 'Total Weight (KG)', p.weight_cost_try as 'Cost of Weight (TRY)', 
+        SELECT p.id, p.purchase_date as 'Date', pr.name as 'Product', p.qty as 'Qty', 
+               p.currency as 'Currency', p.unit_price_foreign as 'Price (Foreign)', 
+               p.total_weight_kg as 'Total Weight (KG)', p.weight_cost_egp as 'Weight Cost (EGP)', 
                p.total_cost_egp as 'Overall Cost (EGP)', p.unit_cost_egp as 'Unit Cost (EGP)'
         FROM purchases p JOIN products pr ON p.product_id = pr.id
     """, conn)
-    st.dataframe(purchases_df, use_container_width=True)
+    st.dataframe(purchases_df.drop(columns=['id']), use_container_width=True)
+
+    if not purchases_df.empty:
+        with st.expander("✏️ Edit or Delete a Purchase"):
+            del_p_id = st.selectbox("Select Purchase ID to Delete", purchases_df['id'])
+            if st.button("❌ Delete Selected Purchase"):
+                c.execute("DELETE FROM purchases WHERE id=?", (int(del_p_id),))
+                conn.commit()
+                st.success("Purchase deleted!")
+                st.rerun()
 
 # --- TAB 4: SALES ---
 with tab4:
@@ -179,7 +281,6 @@ with tab4:
                 c_id = cust_dict[selected_cust]
                 p_id = prod_dict[selected_prod]
                 
-                # Get average cost of this product to calculate profit
                 avg_cost_df = pd.read_sql_query(f"SELECT AVG(unit_cost_egp) as avg_cost FROM purchases WHERE product_id = {p_id}", conn)
                 avg_cost = avg_cost_df['avg_cost'].values[0]
                 
@@ -200,16 +301,25 @@ with tab4:
                     
     st.subheader("Sales History")
     sales_df = pd.read_sql_query("""
-        SELECT s.sale_date as 'Sale Date', c.name as 'Customer', p.name as 'Product', s.qty as 'Qty', 
+        SELECT s.id, s.sale_date as 'Sale Date', c.name as 'Customer', p.name as 'Product', s.qty as 'Qty', 
                s.unit_selling_price_egp as 'Price (EGP)', s.delivery_cost_egp as 'Egypt Shipping (EGP)', 
                s.profit_egp as 'Net Profit (EGP)'
         FROM sales s 
         JOIN customers c ON s.customer_id = c.id
         JOIN products p ON s.product_id = p.id
     """, conn)
-    st.dataframe(sales_df, use_container_width=True)
+    st.dataframe(sales_df.drop(columns=['id']), use_container_width=True)
 
-# --- TAB 5: DASHBOARD ---
+    if not sales_df.empty:
+        with st.expander("✏️ Edit or Delete a Sale"):
+            del_s_id = st.selectbox("Select Sale ID to Delete", sales_df['id'])
+            if st.button("❌ Delete Selected Sale"):
+                c.execute("DELETE FROM sales WHERE id=?", (int(del_s_id),))
+                conn.commit()
+                st.success("Sale deleted!")
+                st.rerun()
+
+# --- TAB 5: DASHBOARD & BACKUP ---
 with tab5:
     st.header("Business Overview")
     col1, col2 = st.columns(2)
@@ -222,16 +332,34 @@ with tab5:
     
     st.divider()
     
-    st.subheader("Export Data")
-    st.write("Download your complete database as an Excel-compatible CSV file.")
+    # SYSTEM BACKUP AND RESTORE SECTION
+    st.header("💾 System Backup & Restore")
+    st.write("Download your database file regularly to keep your Mümkün data perfectly safe. You can restore it anytime to recover your business data.")
     
-    # Download Full Purchases
-    full_purchases = pd.read_sql_query("SELECT * FROM purchases", conn)
-    st.download_button(
-        label="📥 Download Purchases (CSV)",
-        data=full_purchases.to_csv(index=False).encode('utf-8-sig'),
-        file_name='Mumkun_Purchases.csv',
-        mime='text/csv'
-    )
+    b_col1, b_col2 = st.columns(2)
+    
+    # Download Database Button
+    with b_col1:
+        st.subheader("1. Export System Backup")
+        with open(DB_FILE, "rb") as f:
+            st.download_button(
+                label="📥 Download Database File (.db)",
+                data=f,
+                file_name=f"mumkun_backup_{date.today()}.db",
+                mime="application/octet-stream"
+            )
+            
+    # Upload Database Button
+    with b_col2:
+        st.subheader("2. Restore System Backup")
+        uploaded_file = st.file_uploader("Upload your .db backup file", type=["db"])
+        
+        if uploaded_file is not None:
+            if st.button("⚠️ Confirm Restore (Overwrites current data)"):
+                conn.close()
+                with open(DB_FILE, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+                st.success("System restored successfully! Refreshing...")
+                st.rerun()
 
 st.markdown('<div class="footer">Made possible with love.</div>', unsafe_allow_html=True)
