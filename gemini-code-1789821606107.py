@@ -80,24 +80,19 @@ c.execute('''CREATE TABLE IF NOT EXISTS sales (
     cogs_egp REAL, profit_egp REAL)''')
 conn.commit()
 
-# SMART MIGRATION: Add new columns safely without deleting existing data
+# SMART MIGRATION
 try:
     c.execute("ALTER TABLE purchases ADD COLUMN bank_fees_egp REAL DEFAULT 0.0")
     conn.commit()
-except sqlite3.OperationalError:
-    pass
-
+except sqlite3.OperationalError: pass
 try:
     c.execute("ALTER TABLE purchases ADD COLUMN shipping_to_mumkun_egp REAL DEFAULT 0.0")
     conn.commit()
-except sqlite3.OperationalError:
-    pass
-
+except sqlite3.OperationalError: pass
 try:
     c.execute("ALTER TABLE sales ADD COLUMN wrapping_cost_egp REAL DEFAULT 0.0")
     conn.commit()
-except sqlite3.OperationalError:
-    pass
+except sqlite3.OperationalError: pass
 
 def get_products(): return pd.read_sql_query("SELECT * FROM products", conn)
 def get_customers(): return pd.read_sql_query("SELECT * FROM customers", conn)
@@ -240,7 +235,6 @@ with tab3:
                 product_cost_foreign = unit_price_foreign * qty
                 total_foreign = product_cost_foreign + extra_costs_foreign
                 
-                # Convert foreign currency to EGP, add Egypt shipping, bank fees, and mumkun shipping
                 total_cost_egp = (total_foreign * exchange_rate) + weight_cost_egp + bank_fees_egp + shipping_to_mumkun_egp
                 unit_cost_egp = total_cost_egp / qty
                 
@@ -253,7 +247,7 @@ with tab3:
                 conn.commit()
                 
                 st.success(f"Purchase logged successfully for {purchase_date}!")
-                st.info(f"📦 Overall Weight: {total_weight_kg:.2f} KG | 🚚 Cost of Weight: {weight_cost_egp:,.2f} EGP | 🏦 Bank Fees: {bank_fees_egp:,.2f} EGP | 📦 Ship to Mümkün: {shipping_to_mumkun_egp:,.2f} EGP | 💰 Total Cost: {total_cost_egp:,.2f} EGP")
+                st.info(f"📦 Overall Weight: {total_weight_kg:.2f} KG | 🚚 Cost of Weight: {weight_cost_egp:,.2f} EGP | 💰 Total Cost: {total_cost_egp:,.2f} EGP")
                 
     st.subheader("Purchase History")
     purchases_df = pd.read_sql_query("""
@@ -270,7 +264,6 @@ with tab3:
             edit_p_id = st.selectbox("Select Purchase ID to Edit/Delete", purchases_df['id'])
             selected_purch = pd.read_sql_query(f"SELECT * FROM purchases WHERE id={edit_p_id}", conn).iloc[0]
             
-            st.write(f"Editing Purchase ID: {edit_p_id}")
             with st.form("edit_purchase_form"):
                 e_qty = st.number_input("Edit Quantity", value=int(selected_purch['qty']), min_value=1)
                 e_price = st.number_input("Edit Unit Price (Foreign)", value=float(selected_purch['unit_price_foreign']))
@@ -278,8 +271,6 @@ with tab3:
                 e_rate = st.number_input("Edit Exchange Rate", value=float(selected_purch['exchange_rate']))
                 e_ship = st.number_input("Edit Shipping Rate/KG (EGP)", value=float(selected_purch['shipping_per_kg_egp']))
                 e_bank = st.number_input("Edit Bank Fees (EGP)", value=float(selected_purch['bank_fees_egp']))
-                
-                # Check if the column exists in older data, default to 0.0 if not found
                 current_ship_mumkun = selected_purch.get('shipping_to_mumkun_egp', 0.0)
                 if pd.isna(current_ship_mumkun): current_ship_mumkun = 0.0
                 e_ship_mumkun = st.number_input("Edit Ship to Mümkün (EGP)", value=float(current_ship_mumkun))
@@ -352,13 +343,15 @@ with tab4:
                         (str(sale_date), p_id, c_id, sale_qty, unit_selling_price_egp, delivery_cost_egp, wrapping_cost_egp, cogs_egp, profit_egp))
                     conn.commit()
                     
-                    st.success(f"Sale recorded for {sale_date}! Revenue: {revenue:,.2f} EGP | Cost of Goods: {cogs_egp:,.2f} EGP | Net Profit: {profit_egp:,.2f} EGP")
+                    st.success(f"Sale recorded for {sale_date}!")
+                    st.info(f"💵 Revenue: {revenue:,.2f} EGP | 📦 Unit Cost: {avg_cost:,.2f} EGP | 📉 Overall Cost (COGS): {cogs_egp:,.2f} EGP | 📈 Net Profit: {profit_egp:,.2f} EGP")
                     
     st.subheader("Sales History")
     sales_df = pd.read_sql_query("""
         SELECT s.id, s.sale_date as 'Sale Date', c.name as 'Customer', p.name as 'Product', s.qty as 'Qty', 
-               s.unit_selling_price_egp as 'Price (EGP)', s.wrapping_cost_egp as 'Wrapping (EGP)', s.delivery_cost_egp as 'Egypt Shipping (EGP)', 
-               s.profit_egp as 'Net Profit (EGP)'
+               (s.cogs_egp / s.qty) as 'Unit Cost (EGP)', s.cogs_egp as 'Overall Cost (EGP)',
+               s.unit_selling_price_egp as 'Selling Price (EGP)', s.wrapping_cost_egp as 'Wrapping (EGP)', 
+               s.delivery_cost_egp as 'Egypt Shipping (EGP)', s.profit_egp as 'Net Profit (EGP)'
         FROM sales s 
         JOIN customers c ON s.customer_id = c.id
         JOIN products p ON s.product_id = p.id
@@ -375,7 +368,6 @@ with tab4:
                 e_s_price = st.number_input("Edit Selling Price (EGP)", value=float(selected_sale['unit_selling_price_egp']))
                 e_s_deliv = st.number_input("Edit Courier Cost (EGP)", value=float(selected_sale['delivery_cost_egp']))
                 
-                # Check for legacy missing wrap column
                 current_wrap = selected_sale.get('wrapping_cost_egp', 0.0)
                 if pd.isna(current_wrap): current_wrap = 0.0
                 e_s_wrap = st.number_input("Edit Wrapping Cost (EGP)", value=float(current_wrap))
