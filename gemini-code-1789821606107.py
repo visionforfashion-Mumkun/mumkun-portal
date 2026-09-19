@@ -57,7 +57,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# 2. Database setup (v5 with Safe Migration for Bank Fees)
+# 2. Database setup
 DB_FILE = 'mumkun_v5.db'
 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
 c = conn.cursor()
@@ -71,16 +71,30 @@ c.execute('''CREATE TABLE IF NOT EXISTS customers (
 c.execute('''CREATE TABLE IF NOT EXISTS purchases (
     id INTEGER PRIMARY KEY AUTOINCREMENT, purchase_date TEXT, product_id INTEGER, 
     qty INTEGER, currency TEXT, unit_price_foreign REAL, extra_costs_foreign REAL, exchange_rate REAL, 
-    shipping_per_kg_egp REAL, total_weight_kg REAL, weight_cost_egp REAL, bank_fees_egp REAL, total_cost_egp REAL, unit_cost_egp REAL)''')
+    shipping_per_kg_egp REAL, total_weight_kg REAL, weight_cost_egp REAL, bank_fees_egp REAL, 
+    shipping_to_mumkun_egp REAL, total_cost_egp REAL, unit_cost_egp REAL)''')
 
 c.execute('''CREATE TABLE IF NOT EXISTS sales (
     id INTEGER PRIMARY KEY AUTOINCREMENT, sale_date TEXT, product_id INTEGER, customer_id INTEGER, 
-    qty INTEGER, unit_selling_price_egp REAL, delivery_cost_egp REAL, cogs_egp REAL, profit_egp REAL)''')
+    qty INTEGER, unit_selling_price_egp REAL, delivery_cost_egp REAL, wrapping_cost_egp REAL, 
+    cogs_egp REAL, profit_egp REAL)''')
 conn.commit()
 
-# SMART MIGRATION: Add the "bank_fees_egp" column to the database safely
+# SMART MIGRATION: Add new columns safely without deleting existing data
 try:
     c.execute("ALTER TABLE purchases ADD COLUMN bank_fees_egp REAL DEFAULT 0.0")
+    conn.commit()
+except sqlite3.OperationalError:
+    pass
+
+try:
+    c.execute("ALTER TABLE purchases ADD COLUMN shipping_to_mumkun_egp REAL DEFAULT 0.0")
+    conn.commit()
+except sqlite3.OperationalError:
+    pass
+
+try:
+    c.execute("ALTER TABLE sales ADD COLUMN wrapping_cost_egp REAL DEFAULT 0.0")
     conn.commit()
 except sqlite3.OperationalError:
     pass
@@ -214,6 +228,7 @@ with tab3:
             with col3:
                 shipping_per_kg_egp = st.number_input("Shipping Rate per KG (EGP)", min_value=0.0, step=10.0, value=250.0)
                 bank_fees_egp = st.number_input("Bank Fees (EGP)", min_value=0.0, step=10.0, value=0.0)
+                shipping_to_mumkun_egp = st.number_input("Shipping to Mümkün in Egypt (EGP)", min_value=0.0, step=10.0, value=0.0)
                 
             if st.form_submit_button("Calculate & Save Purchase"):
                 prod_id = product_dict[selected_prod_name]
@@ -225,26 +240,26 @@ with tab3:
                 product_cost_foreign = unit_price_foreign * qty
                 total_foreign = product_cost_foreign + extra_costs_foreign
                 
-                # Convert foreign currency to EGP, add Egypt shipping, add Bank Fees
-                total_cost_egp = (total_foreign * exchange_rate) + weight_cost_egp + bank_fees_egp
+                # Convert foreign currency to EGP, add Egypt shipping, bank fees, and mumkun shipping
+                total_cost_egp = (total_foreign * exchange_rate) + weight_cost_egp + bank_fees_egp + shipping_to_mumkun_egp
                 unit_cost_egp = total_cost_egp / qty
                 
                 c.execute('''INSERT INTO purchases 
                     (purchase_date, product_id, qty, currency, unit_price_foreign, extra_costs_foreign, exchange_rate, 
-                    shipping_per_kg_egp, total_weight_kg, weight_cost_egp, bank_fees_egp, total_cost_egp, unit_cost_egp) 
+                    shipping_per_kg_egp, total_weight_kg, weight_cost_egp, bank_fees_egp, shipping_to_mumkun_egp, total_cost_egp, unit_cost_egp) 
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', 
                     (str(purchase_date), prod_id, qty, currency, unit_price_foreign, extra_costs_foreign, exchange_rate,
-                     shipping_per_kg_egp, total_weight_kg, weight_cost_egp, bank_fees_egp, total_cost_egp, unit_cost_egp))
+                     shipping_per_kg_egp, total_weight_kg, weight_cost_egp, bank_fees_egp, shipping_to_mumkun_egp, total_cost_egp, unit_cost_egp))
                 conn.commit()
                 
                 st.success(f"Purchase logged successfully for {purchase_date}!")
-                st.info(f"📦 Overall Weight: {total_weight_kg:.2f} KG | 🚚 Cost of Weight: {weight_cost_egp:,.2f} EGP | 🏦 Bank Fees: {bank_fees_egp:,.2f} EGP | 💰 Total Cost: {total_cost_egp:,.2f} EGP")
+                st.info(f"📦 Overall Weight: {total_weight_kg:.2f} KG | 🚚 Cost of Weight: {weight_cost_egp:,.2f} EGP | 🏦 Bank Fees: {bank_fees_egp:,.2f} EGP | 📦 Ship to Mümkün: {shipping_to_mumkun_egp:,.2f} EGP | 💰 Total Cost: {total_cost_egp:,.2f} EGP")
                 
     st.subheader("Purchase History")
     purchases_df = pd.read_sql_query("""
         SELECT p.id, p.purchase_date as 'Date', pr.name as 'Product', p.qty as 'Qty', 
                p.currency as 'Currency', p.unit_price_foreign as 'Price (Foreign)', 
-               p.bank_fees_egp as 'Bank Fees (EGP)', p.weight_cost_egp as 'Weight Cost (EGP)', 
+               p.bank_fees_egp as 'Bank Fees (EGP)', p.shipping_to_mumkun_egp as 'Ship to Mümkün (EGP)', p.weight_cost_egp as 'Weight Cost (EGP)', 
                p.total_cost_egp as 'Overall Cost (EGP)', p.unit_cost_egp as 'Unit Cost (EGP)'
         FROM purchases p JOIN products pr ON p.product_id = pr.id
     """, conn)
@@ -264,19 +279,23 @@ with tab3:
                 e_ship = st.number_input("Edit Shipping Rate/KG (EGP)", value=float(selected_purch['shipping_per_kg_egp']))
                 e_bank = st.number_input("Edit Bank Fees (EGP)", value=float(selected_purch['bank_fees_egp']))
                 
+                # Check if the column exists in older data, default to 0.0 if not found
+                current_ship_mumkun = selected_purch.get('shipping_to_mumkun_egp', 0.0)
+                if pd.isna(current_ship_mumkun): current_ship_mumkun = 0.0
+                e_ship_mumkun = st.number_input("Edit Ship to Mümkün (EGP)", value=float(current_ship_mumkun))
+                
                 col_update, col_del = st.columns(2)
                 if col_update.form_submit_button("Update Purchase"):
-                    # Recalculate
                     unit_weight = prod_df.loc[prod_df['id'] == selected_purch['product_id'], 'weight_kg'].values[0]
                     t_weight = unit_weight * e_qty
                     w_cost = t_weight * e_ship
-                    t_cost_egp = (((e_price * e_qty) + e_extra) * e_rate) + w_cost + e_bank
+                    t_cost_egp = (((e_price * e_qty) + e_extra) * e_rate) + w_cost + e_bank + e_ship_mumkun
                     u_cost_egp = t_cost_egp / e_qty
                     
                     c.execute('''UPDATE purchases SET qty=?, unit_price_foreign=?, extra_costs_foreign=?, 
                                  exchange_rate=?, shipping_per_kg_egp=?, total_weight_kg=?, weight_cost_egp=?, 
-                                 bank_fees_egp=?, total_cost_egp=?, unit_cost_egp=? WHERE id=?''',
-                              (e_qty, e_price, e_extra, e_rate, e_ship, t_weight, w_cost, e_bank, t_cost_egp, u_cost_egp, int(edit_p_id)))
+                                 bank_fees_egp=?, shipping_to_mumkun_egp=?, total_cost_egp=?, unit_cost_egp=? WHERE id=?''',
+                              (e_qty, e_price, e_extra, e_rate, e_ship, t_weight, w_cost, e_bank, e_ship_mumkun, t_cost_egp, u_cost_egp, int(edit_p_id)))
                     conn.commit()
                     st.success("Purchase Updated!")
                     st.rerun()
@@ -311,6 +330,7 @@ with tab4:
             with col3:
                 unit_selling_price_egp = st.number_input("Selling Price per piece (EGP)", min_value=0.0, step=50.0)
                 delivery_cost_egp = st.number_input("Shipping in Egypt (Courier Cost EGP)", min_value=0.0, step=10.0)
+                wrapping_cost_egp = st.number_input("Wrapping Cost (EGP)", min_value=0.0, step=5.0, value=0.0)
                 
             if st.form_submit_button("Calculate & Save Sale"):
                 c_id = cust_dict[selected_cust]
@@ -324,20 +344,20 @@ with tab4:
                 else:
                     cogs_egp = avg_cost * sale_qty
                     revenue = unit_selling_price_egp * sale_qty
-                    profit_egp = revenue - cogs_egp - delivery_cost_egp
+                    profit_egp = revenue - cogs_egp - delivery_cost_egp - wrapping_cost_egp
                     
                     c.execute('''INSERT INTO sales 
-                        (sale_date, product_id, customer_id, qty, unit_selling_price_egp, delivery_cost_egp, cogs_egp, profit_egp) 
-                        VALUES (?,?,?,?,?,?,?,?)''', 
-                        (str(sale_date), p_id, c_id, sale_qty, unit_selling_price_egp, delivery_cost_egp, cogs_egp, profit_egp))
+                        (sale_date, product_id, customer_id, qty, unit_selling_price_egp, delivery_cost_egp, wrapping_cost_egp, cogs_egp, profit_egp) 
+                        VALUES (?,?,?,?,?,?,?,?,?)''', 
+                        (str(sale_date), p_id, c_id, sale_qty, unit_selling_price_egp, delivery_cost_egp, wrapping_cost_egp, cogs_egp, profit_egp))
                     conn.commit()
                     
-                    st.success(f"Sale recorded for {sale_date}! Revenue: {revenue:,.2f} EGP | Net Profit: {profit_egp:,.2f} EGP")
+                    st.success(f"Sale recorded for {sale_date}! Revenue: {revenue:,.2f} EGP | Cost of Goods: {cogs_egp:,.2f} EGP | Net Profit: {profit_egp:,.2f} EGP")
                     
     st.subheader("Sales History")
     sales_df = pd.read_sql_query("""
         SELECT s.id, s.sale_date as 'Sale Date', c.name as 'Customer', p.name as 'Product', s.qty as 'Qty', 
-               s.unit_selling_price_egp as 'Price (EGP)', s.delivery_cost_egp as 'Egypt Shipping (EGP)', 
+               s.unit_selling_price_egp as 'Price (EGP)', s.wrapping_cost_egp as 'Wrapping (EGP)', s.delivery_cost_egp as 'Egypt Shipping (EGP)', 
                s.profit_egp as 'Net Profit (EGP)'
         FROM sales s 
         JOIN customers c ON s.customer_id = c.id
@@ -355,16 +375,21 @@ with tab4:
                 e_s_price = st.number_input("Edit Selling Price (EGP)", value=float(selected_sale['unit_selling_price_egp']))
                 e_s_deliv = st.number_input("Edit Courier Cost (EGP)", value=float(selected_sale['delivery_cost_egp']))
                 
+                # Check for legacy missing wrap column
+                current_wrap = selected_sale.get('wrapping_cost_egp', 0.0)
+                if pd.isna(current_wrap): current_wrap = 0.0
+                e_s_wrap = st.number_input("Edit Wrapping Cost (EGP)", value=float(current_wrap))
+                
                 col_update_s, col_del_s = st.columns(2)
                 if col_update_s.form_submit_button("Update Sale"):
                     avg_cost_df = pd.read_sql_query(f"SELECT AVG(unit_cost_egp) as avg_cost FROM purchases WHERE product_id = {int(selected_sale['product_id'])}", conn)
                     avg_cost = avg_cost_df['avg_cost'].values[0]
                     cogs = avg_cost * e_s_qty
                     rev = e_s_price * e_s_qty
-                    prof = rev - cogs - e_s_deliv
+                    prof = rev - cogs - e_s_deliv - e_s_wrap
                     
-                    c.execute('''UPDATE sales SET qty=?, unit_selling_price_egp=?, delivery_cost_egp=?, cogs_egp=?, profit_egp=? WHERE id=?''',
-                              (e_s_qty, e_s_price, e_s_deliv, cogs, prof, int(edit_s_id)))
+                    c.execute('''UPDATE sales SET qty=?, unit_selling_price_egp=?, delivery_cost_egp=?, wrapping_cost_egp=?, cogs_egp=?, profit_egp=? WHERE id=?''',
+                              (e_s_qty, e_s_price, e_s_deliv, e_s_wrap, cogs, prof, int(edit_s_id)))
                     conn.commit()
                     st.success("Sale Updated!")
                     st.rerun()
@@ -388,13 +413,11 @@ with tab5:
     
     st.divider()
     
-    # SYSTEM BACKUP AND RESTORE SECTION
     st.header("💾 System Backup & Restore")
     st.write("Download your database file regularly to keep your Mümkün data perfectly safe.")
     
     b_col1, b_col2, b_col3 = st.columns(3)
     
-    # Download Database DB File
     with b_col1:
         st.subheader("1. System Backup")
         with open(DB_FILE, "rb") as f:
@@ -405,11 +428,9 @@ with tab5:
                 mime="application/octet-stream"
             )
             
-    # Download Excel Report
     with b_col2:
         st.subheader("2. Excel Report")
         
-        # Gather all tables
         df_prod = pd.read_sql_query("SELECT * FROM products", conn)
         df_cust = pd.read_sql_query("SELECT * FROM customers", conn)
         df_purch = pd.read_sql_query("SELECT * FROM purchases", conn)
@@ -429,7 +450,6 @@ with tab5:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
             
-    # Upload Database Button
     with b_col3:
         st.subheader("3. Restore System Backup")
         uploaded_file = st.file_uploader("Upload your .db backup file", type=["db"])
