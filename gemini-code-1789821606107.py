@@ -62,6 +62,16 @@ DB_FILE = 'mumkun_v5.db'
 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
 c = conn.cursor()
 
+c.execute('''CREATE TABLE IF NOT EXISTS categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)''')
+
+# Seed default categories (without "Other") if table is empty
+c.execute("SELECT COUNT(*) FROM categories")
+if c.fetchone()[0] == 0:
+    for default_cat in ["Skincare", "Fashion", "Accessories"]:
+        c.execute("INSERT OR IGNORE INTO categories (name) VALUES (?)", (default_cat,))
+    conn.commit()
+
 c.execute('''CREATE TABLE IF NOT EXISTS products (
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, category TEXT, supplier TEXT, weight_kg REAL)''')
 
@@ -80,20 +90,22 @@ c.execute('''CREATE TABLE IF NOT EXISTS sales (
     cogs_egp REAL, profit_egp REAL)''')
 conn.commit()
 
-# SMART MIGRATION
-try:
-    c.execute("ALTER TABLE purchases ADD COLUMN bank_fees_egp REAL DEFAULT 0.0")
-    conn.commit()
+# SMART MIGRATIONS (Supports restoring any older backup file seamlessly)
+try: c.execute("ALTER TABLE purchases ADD COLUMN currency TEXT DEFAULT 'TRY'")
 except sqlite3.OperationalError: pass
-try:
-    c.execute("ALTER TABLE purchases ADD COLUMN shipping_to_mumkun_egp REAL DEFAULT 0.0")
-    conn.commit()
+try: c.execute("ALTER TABLE purchases RENAME COLUMN unit_price_try TO unit_price_foreign")
 except sqlite3.OperationalError: pass
-try:
-    c.execute("ALTER TABLE sales ADD COLUMN wrapping_cost_egp REAL DEFAULT 0.0")
-    conn.commit()
+try: c.execute("ALTER TABLE purchases RENAME COLUMN extra_costs_try TO extra_costs_foreign")
 except sqlite3.OperationalError: pass
+try: c.execute("ALTER TABLE purchases ADD COLUMN bank_fees_egp REAL DEFAULT 0.0")
+except sqlite3.OperationalError: pass
+try: c.execute("ALTER TABLE purchases ADD COLUMN shipping_to_mumkun_egp REAL DEFAULT 0.0")
+except sqlite3.OperationalError: pass
+try: c.execute("ALTER TABLE sales ADD COLUMN wrapping_cost_egp REAL DEFAULT 0.0")
+except sqlite3.OperationalError: pass
+conn.commit()
 
+def get_categories(): return pd.read_sql_query("SELECT * FROM categories", conn)
 def get_products(): return pd.read_sql_query("SELECT * FROM products", conn)
 def get_customers(): return pd.read_sql_query("SELECT * FROM customers", conn)
 
@@ -104,11 +116,43 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["🛍️ Products", "👥 Customers", "�
 # --- TAB 1: PRODUCTS ---
 with tab1:
     st.header("Add New Product")
+    
+    # Manage Categories Expander
+    with st.expander("🏷️ Manage Categories (Add or Delete)"):
+        cat_col1, cat_col2 = st.columns(2)
+        with cat_col1:
+            new_cat_name = st.text_input("New Category Name").strip()
+            if st.button("➕ Add Category"):
+                if new_cat_name:
+                    try:
+                        c.execute("INSERT INTO categories (name) VALUES (?)", (new_cat_name,))
+                        conn.commit()
+                        st.success(f"Category '{new_cat_name}' added!")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("This category already exists!")
+                else:
+                    st.error("Please enter a category name.")
+                    
+        with cat_col2:
+            current_cats = get_categories()['name'].tolist()
+            if current_cats:
+                del_cat_name = st.selectbox("Select Category to Remove", current_cats)
+                if st.button("❌ Delete Category"):
+                    c.execute("DELETE FROM categories WHERE name=?", (del_cat_name,))
+                    conn.commit()
+                    st.success(f"Category '{del_cat_name}' removed!")
+                    st.rerun()
+
+    cat_list = get_categories()['name'].tolist()
+    if not cat_list:
+        cat_list = ["Uncategorized"]
+
     with st.form("product_form"):
         col1, col2 = st.columns(2)
         with col1:
             p_name = st.text_input("Product Name").strip()
-            p_category = st.selectbox("Category", ["Skincare", "Fashion", "Accessories", "Other"])
+            p_category = st.selectbox("Category", cat_list)
         with col2:
             p_supplier = st.text_input("Supplier (e.g., Trendyol, Zara, Shein)")
             p_weight = st.number_input("Weight per piece (KG)", min_value=0.01, step=0.05, value=0.20)
@@ -131,7 +175,6 @@ with tab1:
     prod_df = get_products()
     
     if not prod_df.empty:
-        # Create sequential row ID (1, 2, 3...)
         prod_df.insert(0, 'ID', range(1, len(prod_df) + 1))
         display_prod_df = prod_df[['ID', 'name', 'category', 'supplier', 'weight_kg']].rename(columns={
             'name': 'Product Name', 'category': 'Category', 'supplier': 'Supplier', 'weight_kg': 'Weight (KG)'
@@ -144,15 +187,23 @@ with tab1:
             real_p_id = prod_options[selected_prod_label]
             selected_p = prod_df[prod_df['id'] == real_p_id].iloc[0]
             
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3, c4 = st.columns(4)
             new_p_name = c1.text_input("Edit Name", selected_p['name'], key="ep_name")
-            new_p_sup = c2.text_input("Edit Supplier", selected_p['supplier'] or "", key="ep_sup")
-            new_p_weight = c3.number_input("Edit Weight (KG)", value=float(selected_p['weight_kg']), key="ep_w")
+            
+            # Allow editing category as well
+            edit_cat_options = list(cat_list)
+            if selected_p['category'] not in edit_cat_options and selected_p['category']:
+                edit_cat_options.append(selected_p['category'])
+            cat_idx = edit_cat_options.index(selected_p['category']) if selected_p['category'] in edit_cat_options else 0
+            new_p_cat = c2.selectbox("Edit Category", edit_cat_options, index=cat_idx, key="ep_cat")
+            
+            new_p_sup = c3.text_input("Edit Supplier", selected_p['supplier'] or "", key="ep_sup")
+            new_p_weight = c4.number_input("Edit Weight (KG)", value=float(selected_p['weight_kg']), key="ep_w")
             
             col_update, col_del = st.columns(2)
             if col_update.button("Update Product"):
-                c.execute("UPDATE products SET name=?, supplier=?, weight_kg=? WHERE id=?", 
-                          (new_p_name, new_p_sup, new_p_weight, int(real_p_id)))
+                c.execute("UPDATE products SET name=?, category=?, supplier=?, weight_kg=? WHERE id=?", 
+                          (new_p_name, new_p_cat, new_p_sup, new_p_weight, int(real_p_id)))
                 conn.commit()
                 st.success("Updated!")
                 st.rerun()
@@ -191,7 +242,6 @@ with tab2:
     cust_df = get_customers()
     
     if not cust_df.empty:
-        # Create sequential row ID (1, 2, 3...)
         cust_df.insert(0, 'ID', range(1, len(cust_df) + 1))
         display_cust_df = cust_df[['ID', 'name', 'phone']].rename(columns={
             'name': 'Customer Name', 'phone': 'Phone Number'
@@ -285,7 +335,6 @@ with tab3:
     """, conn)
     
     if not purchases_df.empty:
-        # Create sequential row ID (1, 2, 3...)
         purchases_df.insert(0, 'ID', range(1, len(purchases_df) + 1))
         st.dataframe(purchases_df.drop(columns=['db_id']), use_container_width=True, hide_index=True)
 
@@ -394,7 +443,6 @@ with tab4:
     """, conn)
     
     if not sales_df.empty:
-        # Create sequential row ID (1, 2, 3...)
         sales_df.insert(0, 'ID', range(1, len(sales_df) + 1))
         st.dataframe(sales_df.drop(columns=['db_id']), use_container_width=True, hide_index=True)
 
