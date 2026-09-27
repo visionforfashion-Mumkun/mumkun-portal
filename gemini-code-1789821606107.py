@@ -123,33 +123,46 @@ with tab1:
                               (p_name, p_category, p_supplier, p_weight))
                     conn.commit()
                     st.success(f"Product '{p_name}' added to database.")
+                    st.rerun()
             else:
                 st.error("Please enter a product name.")
     
     st.subheader("Product Catalog")
     prod_df = get_products()
-    st.dataframe(prod_df, use_container_width=True)
-
+    
     if not prod_df.empty:
+        # Create sequential row ID (1, 2, 3...)
+        prod_df.insert(0, 'ID', range(1, len(prod_df) + 1))
+        display_prod_df = prod_df[['ID', 'name', 'category', 'supplier', 'weight_kg']].rename(columns={
+            'name': 'Product Name', 'category': 'Category', 'supplier': 'Supplier', 'weight_kg': 'Weight (KG)'
+        })
+        st.dataframe(display_prod_df, use_container_width=True, hide_index=True)
+
         with st.expander("✏️ Edit or Delete a Product"):
-            edit_p_name = st.selectbox("Select Product to Edit", prod_df['name'])
-            selected_p = prod_df[prod_df['name'] == edit_p_name].iloc[0]
+            prod_options = {f"ID {row['ID']} | {row['name']}": row['id'] for _, row in prod_df.iterrows()}
+            selected_prod_label = st.selectbox("Select Product to Edit/Delete", list(prod_options.keys()))
+            real_p_id = prod_options[selected_prod_label]
+            selected_p = prod_df[prod_df['id'] == real_p_id].iloc[0]
             
-            c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns(3)
             new_p_name = c1.text_input("Edit Name", selected_p['name'], key="ep_name")
-            new_p_weight = c2.number_input("Edit Weight (KG)", value=float(selected_p['weight_kg']), key="ep_w")
+            new_p_sup = c2.text_input("Edit Supplier", selected_p['supplier'] or "", key="ep_sup")
+            new_p_weight = c3.number_input("Edit Weight (KG)", value=float(selected_p['weight_kg']), key="ep_w")
             
             col_update, col_del = st.columns(2)
             if col_update.button("Update Product"):
-                c.execute("UPDATE products SET name=?, weight_kg=? WHERE id=?", (new_p_name, new_p_weight, int(selected_p['id'])))
+                c.execute("UPDATE products SET name=?, supplier=?, weight_kg=? WHERE id=?", 
+                          (new_p_name, new_p_sup, new_p_weight, int(real_p_id)))
                 conn.commit()
                 st.success("Updated!")
                 st.rerun()
             if col_del.button("❌ Delete Product"):
-                c.execute("DELETE FROM products WHERE id=?", (int(selected_p['id']),))
+                c.execute("DELETE FROM products WHERE id=?", (int(real_p_id),))
                 conn.commit()
                 st.success("Deleted!")
                 st.rerun()
+    else:
+        st.info("No products added yet.")
 
 # --- TAB 2: CUSTOMERS ---
 with tab2:
@@ -170,33 +183,45 @@ with tab2:
                     c.execute('INSERT INTO customers (name, phone) VALUES (?,?)', (c_name, c_phone))
                     conn.commit()
                     st.success(f"Customer '{c_name}' added to database.")
+                    st.rerun()
             else:
                 st.error("Please enter a customer name.")
             
     st.subheader("Client List")
     cust_df = get_customers()
-    st.dataframe(cust_df, use_container_width=True)
-
+    
     if not cust_df.empty:
+        # Create sequential row ID (1, 2, 3...)
+        cust_df.insert(0, 'ID', range(1, len(cust_df) + 1))
+        display_cust_df = cust_df[['ID', 'name', 'phone']].rename(columns={
+            'name': 'Customer Name', 'phone': 'Phone Number'
+        })
+        st.dataframe(display_cust_df, use_container_width=True, hide_index=True)
+
         with st.expander("✏️ Edit or Delete a Customer"):
-            edit_c_name = st.selectbox("Select Customer to Edit", cust_df['name'])
-            selected_c = cust_df[cust_df['name'] == edit_c_name].iloc[0]
+            cust_options = {f"ID {row['ID']} | {row['name']}": row['id'] for _, row in cust_df.iterrows()}
+            selected_cust_label = st.selectbox("Select Customer to Edit/Delete", list(cust_options.keys()))
+            real_c_id = cust_options[selected_cust_label]
+            selected_c = cust_df[cust_df['id'] == real_c_id].iloc[0]
             
             c1, c2 = st.columns(2)
             new_c_name = c1.text_input("Edit Name", selected_c['name'], key="ec_name")
-            new_c_phone = c2.text_input("Edit Phone", selected_c['phone'], key="ec_phone")
+            new_c_phone = c2.text_input("Edit Phone", selected_c['phone'] or "", key="ec_phone")
             
             col_update, col_del = st.columns(2)
             if col_update.button("Update Customer"):
-                c.execute("UPDATE customers SET name=?, phone=? WHERE id=?", (new_c_name, new_c_phone, int(selected_c['id'])))
+                c.execute("UPDATE customers SET name=?, phone=? WHERE id=?", 
+                          (new_c_name, new_c_phone, int(real_c_id)))
                 conn.commit()
                 st.success("Updated!")
                 st.rerun()
             if col_del.button("❌ Delete Customer"):
-                c.execute("DELETE FROM customers WHERE id=?", (int(selected_c['id']),))
+                c.execute("DELETE FROM customers WHERE id=?", (int(real_c_id),))
                 conn.commit()
                 st.success("Deleted!")
                 st.rerun()
+    else:
+        st.info("No customers added yet.")
 
 # --- TAB 3: PURCHASES ---
 with tab3:
@@ -251,18 +276,27 @@ with tab3:
                 
     st.subheader("Purchase History")
     purchases_df = pd.read_sql_query("""
-        SELECT p.id, p.purchase_date as 'Date', pr.name as 'Product', p.qty as 'Qty', 
+        SELECT p.id as db_id, p.purchase_date as 'Date', pr.name as 'Product', p.qty as 'Qty', 
                p.currency as 'Currency', p.unit_price_foreign as 'Price (Foreign)', 
-               p.bank_fees_egp as 'Bank Fees (EGP)', p.shipping_to_mumkun_egp as 'Ship to Mümkün (EGP)', p.weight_cost_egp as 'Weight Cost (EGP)', 
-               p.total_cost_egp as 'Overall Cost (EGP)', p.unit_cost_egp as 'Unit Cost (EGP)'
+               p.bank_fees_egp as 'Bank Fees (EGP)', p.shipping_to_mumkun_egp as 'Ship to Mümkün (EGP)', 
+               p.weight_cost_egp as 'Weight Cost (EGP)', p.total_cost_egp as 'Overall Cost (EGP)', 
+               p.unit_cost_egp as 'Unit Cost (EGP)'
         FROM purchases p JOIN products pr ON p.product_id = pr.id
     """, conn)
-    st.dataframe(purchases_df.drop(columns=['id']), use_container_width=True)
-
+    
     if not purchases_df.empty:
+        # Create sequential row ID (1, 2, 3...)
+        purchases_df.insert(0, 'ID', range(1, len(purchases_df) + 1))
+        st.dataframe(purchases_df.drop(columns=['db_id']), use_container_width=True, hide_index=True)
+
         with st.expander("✏️ Edit or Delete a Purchase"):
-            edit_p_id = st.selectbox("Select Purchase ID to Edit/Delete", purchases_df['id'])
-            selected_purch = pd.read_sql_query(f"SELECT * FROM purchases WHERE id={edit_p_id}", conn).iloc[0]
+            purch_options = {
+                f"ID {row['ID']} | {row['Date']} - {row['Product']} (Qty: {row['Qty']})": row['db_id'] 
+                for _, row in purchases_df.iterrows()
+            }
+            selected_purch_label = st.selectbox("Select Purchase to Edit/Delete", list(purch_options.keys()))
+            real_purch_id = purch_options[selected_purch_label]
+            selected_purch = pd.read_sql_query(f"SELECT * FROM purchases WHERE id={real_purch_id}", conn).iloc[0]
             
             with st.form("edit_purchase_form"):
                 e_qty = st.number_input("Edit Quantity", value=int(selected_purch['qty']), min_value=1)
@@ -270,7 +304,7 @@ with tab3:
                 e_extra = st.number_input("Edit Extra Costs (Foreign)", value=float(selected_purch['extra_costs_foreign']))
                 e_rate = st.number_input("Edit Exchange Rate", value=float(selected_purch['exchange_rate']))
                 e_ship = st.number_input("Edit Shipping Rate/KG (EGP)", value=float(selected_purch['shipping_per_kg_egp']))
-                e_bank = st.number_input("Edit Bank Fees (EGP)", value=float(selected_purch['bank_fees_egp']))
+                e_bank = st.number_input("Edit Bank Fees (EGP)", value=float(selected_purch['bank_fees_egp'] or 0.0))
                 current_ship_mumkun = selected_purch.get('shipping_to_mumkun_egp', 0.0)
                 if pd.isna(current_ship_mumkun): current_ship_mumkun = 0.0
                 e_ship_mumkun = st.number_input("Edit Ship to Mümkün (EGP)", value=float(current_ship_mumkun))
@@ -286,16 +320,18 @@ with tab3:
                     c.execute('''UPDATE purchases SET qty=?, unit_price_foreign=?, extra_costs_foreign=?, 
                                  exchange_rate=?, shipping_per_kg_egp=?, total_weight_kg=?, weight_cost_egp=?, 
                                  bank_fees_egp=?, shipping_to_mumkun_egp=?, total_cost_egp=?, unit_cost_egp=? WHERE id=?''',
-                              (e_qty, e_price, e_extra, e_rate, e_ship, t_weight, w_cost, e_bank, e_ship_mumkun, t_cost_egp, u_cost_egp, int(edit_p_id)))
+                              (e_qty, e_price, e_extra, e_rate, e_ship, t_weight, w_cost, e_bank, e_ship_mumkun, t_cost_egp, u_cost_egp, int(real_purch_id)))
                     conn.commit()
                     st.success("Purchase Updated!")
                     st.rerun()
                     
                 if col_del.form_submit_button("❌ Delete Purchase"):
-                    c.execute("DELETE FROM purchases WHERE id=?", (int(edit_p_id),))
+                    c.execute("DELETE FROM purchases WHERE id=?", (int(real_purch_id),))
                     conn.commit()
                     st.success("Purchase deleted!")
                     st.rerun()
+    else:
+        st.info("No purchases logged yet.")
 
 # --- TAB 4: SALES ---
 with tab4:
@@ -348,7 +384,7 @@ with tab4:
                     
     st.subheader("Sales History")
     sales_df = pd.read_sql_query("""
-        SELECT s.id, s.sale_date as 'Sale Date', c.name as 'Customer', p.name as 'Product', s.qty as 'Qty', 
+        SELECT s.id as db_id, s.sale_date as 'Sale Date', c.name as 'Customer', p.name as 'Product', s.qty as 'Qty', 
                (s.cogs_egp / s.qty) as 'Unit Cost (EGP)', s.cogs_egp as 'Overall Cost (EGP)',
                s.unit_selling_price_egp as 'Selling Price (EGP)', s.wrapping_cost_egp as 'Wrapping (EGP)', 
                s.delivery_cost_egp as 'Egypt Shipping (EGP)', s.profit_egp as 'Net Profit (EGP)'
@@ -356,12 +392,20 @@ with tab4:
         JOIN customers c ON s.customer_id = c.id
         JOIN products p ON s.product_id = p.id
     """, conn)
-    st.dataframe(sales_df.drop(columns=['id']), use_container_width=True)
-
+    
     if not sales_df.empty:
+        # Create sequential row ID (1, 2, 3...)
+        sales_df.insert(0, 'ID', range(1, len(sales_df) + 1))
+        st.dataframe(sales_df.drop(columns=['db_id']), use_container_width=True, hide_index=True)
+
         with st.expander("✏️ Edit or Delete a Sale"):
-            edit_s_id = st.selectbox("Select Sale ID to Edit/Delete", sales_df['id'])
-            selected_sale = pd.read_sql_query(f"SELECT * FROM sales WHERE id={edit_s_id}", conn).iloc[0]
+            sale_options = {
+                f"ID {row['ID']} | {row['Sale Date']} - {row['Customer']} ({row['Product']})": row['db_id'] 
+                for _, row in sales_df.iterrows()
+            }
+            selected_sale_label = st.selectbox("Select Sale to Edit/Delete", list(sale_options.keys()))
+            real_sale_id = sale_options[selected_sale_label]
+            selected_sale = pd.read_sql_query(f"SELECT * FROM sales WHERE id={real_sale_id}", conn).iloc[0]
             
             with st.form("edit_sale_form"):
                 e_s_qty = st.number_input("Edit Quantity Sold", value=int(selected_sale['qty']), min_value=1)
@@ -381,16 +425,18 @@ with tab4:
                     prof = rev - cogs - e_s_deliv - e_s_wrap
                     
                     c.execute('''UPDATE sales SET qty=?, unit_selling_price_egp=?, delivery_cost_egp=?, wrapping_cost_egp=?, cogs_egp=?, profit_egp=? WHERE id=?''',
-                              (e_s_qty, e_s_price, e_s_deliv, e_s_wrap, cogs, prof, int(edit_s_id)))
+                              (e_s_qty, e_s_price, e_s_deliv, e_s_wrap, cogs, prof, int(real_sale_id)))
                     conn.commit()
                     st.success("Sale Updated!")
                     st.rerun()
                     
                 if col_del_s.form_submit_button("❌ Delete Sale"):
-                    c.execute("DELETE FROM sales WHERE id=?", (int(edit_s_id),))
+                    c.execute("DELETE FROM sales WHERE id=?", (int(real_sale_id),))
                     conn.commit()
                     st.success("Sale deleted!")
                     st.rerun()
+    else:
+        st.info("No sales logged yet.")
 
 # --- TAB 5: DASHBOARD & BACKUP ---
 with tab5:
